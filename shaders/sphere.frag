@@ -1,0 +1,8 @@
+#version 460 core
+
+layout(location = 0) out vec4 fragmentColor;
+
+void main()
+{
+    fragmentColor = vec4(0.2, 0.7, 0.9, 1.0);
+}

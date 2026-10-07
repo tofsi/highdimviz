@@ -17,6 +17,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG 1.0.3
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(glm)
+
 add_library(glad STATIC external/glad/src/gl.c)
 target_include_directories(glad PUBLIC external/glad/include)
 
@@ -24,7 +32,7 @@ add_executable(highdimviz src/main.cpp)
 target_compile_features(highdimviz PRIVATE cxx_std_20)
 set_target_properties(highdimviz PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_definitions(highdimviz PRIVATE GLFW_INCLUDE_NONE)
-target_link_libraries(highdimviz PRIVATE glfw glad)
+target_link_libraries(highdimviz PRIVATE glfw glm glad)
 
 if(MSVC)
     target_compile_options(highdimviz PRIVATE /W4 /permissive-)
