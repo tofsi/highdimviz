@@ -207,6 +207,7 @@ int main(int argc, char* argv[])
     //GLint uploaded_bytes = 0;
     //glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &uploaded_bytes);
     //std::cout << "Vertex buffer size: " << uploaded_bytes << " bytes\n";
+    // VAO setup
     GLuint vertex_array = 0;
     glGenVertexArrays(1, &vertex_array);
     glBindVertexArray(vertex_array);
@@ -220,6 +221,16 @@ int main(int argc, char* argv[])
         sizeof(Vertex),
         reinterpret_cast<const void*>(offsetof(Vertex, position)));
     glEnableVertexAttribArray(0);
+    
+    glVertexAttribPointer(
+        1,
+        3,
+        GL_FLOAT,
+        GL_FALSE,
+        sizeof(Vertex),
+        reinterpret_cast<const void*>(offsetof(Vertex, normal)));
+    glEnableVertexAttribArray(1);
+
     GLuint index_buffer = 0;
     glGenBuffers(1, &index_buffer);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
