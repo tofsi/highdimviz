@@ -17,6 +17,7 @@
 #include <vector>
 #include <cmath>
 #include <numbers>
+#include <algorithm>
 
 // User defined
 #include "Dataset.hpp"
@@ -36,7 +37,7 @@ void framebuffer_size_callback(GLFWwindow*, int width, int height)
 {
     glViewport(0, 0, width, height);
 }
-
+// Shader stuff
 GLuint compile_shader(GLenum type, const std::string& source)
 {
     GLuint shader = glCreateShader(type);
@@ -61,6 +62,21 @@ GLuint compile_shader(GLenum type, const std::string& source)
 
     return shader;
 }
+
+std::string read_shader_file(const std::string& path)
+{
+    std::ifstream file(path);
+
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Could not open shader file: " + path);
+    }
+
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    return contents.str();
+}
+
 
 // Geometry helpers
 struct Vertex
@@ -105,19 +121,6 @@ void generate_sphere(
 }
 }
 
-std::string read_shader_file(const std::string& path)
-{
-    std::ifstream file(path);
-
-    if (!file.is_open())
-    {
-        throw std::runtime_error("Could not open shader file: " + path);
-    }
-
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    return contents.str();
-}
 
 int main(int argc, char* argv[])
 {
@@ -149,8 +152,9 @@ int main(int argc, char* argv[])
         glfwTerminate();
         return 1;
     }
+    const DataSet plotting_data = load_csv("data/gaussian_example.csv");
     GLuint program = 0;
-    // Shaders!
+    // read, compile shaders
     try
     {
         // Read shaders
@@ -199,7 +203,7 @@ int main(int argc, char* argv[])
     // allocate sphere data to buffer
     std::vector<Vertex> vertices;
     std::vector<unsigned int> indices;
-    generate_sphere(vertices, indices, 32, 64, 1.0f);
+    generate_sphere(vertices, indices, 4, 8, 1.0f);
     GLuint vertex_buffer = 0;
     glGenBuffers(1, &vertex_buffer);
     glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
@@ -211,10 +215,7 @@ int main(int argc, char* argv[])
         vertices.data(),
         GL_STATIC_DRAW
     );
-    // Check allocation
-    //GLint uploaded_bytes = 0;
-    //glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &uploaded_bytes);
-    //std::cout << "Vertex buffer size: " << uploaded_bytes << " bytes\n";
+
     // VAO setup
     GLuint vertex_array = 0;
     glGenVertexArrays(1, &vertex_array);
@@ -249,15 +250,6 @@ int main(int argc, char* argv[])
         index_bytes,
         indices.data(),
         GL_STATIC_DRAW);
-    // Check allocation
-    /* GLint uploaded_index_bytes = 0;
-    glGetBufferParameteriv(
-        GL_ELEMENT_ARRAY_BUFFER,
-        GL_BUFFER_SIZE,
-        &uploaded_index_bytes);
-
-    std::cout << "Index buffer size: "
-            << uploaded_index_bytes << " bytes\n"; */
     
     glBindVertexArray(0); // Unbind vertex_array
     
@@ -266,11 +258,16 @@ int main(int argc, char* argv[])
     const GLint model_location = glGetUniformLocation(program, "model");
     const GLint view_location = glGetUniformLocation(program, "view");
     const GLint projection_location = glGetUniformLocation(program, "projection");
-    //const glm::mat4 model(1.0f);
-    const glm::mat4 view = glm::lookAt(
-        glm::vec3(0.0f, 0.0f, 3.0f),
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(1.0f, 0.0f, 0.0f));
+    
+    // Mouse controls
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    const float camera_distance = 3.0f;
+    const float mouse_sensitivity = 0.005f;
+    bool dragging = false;
+    double previous_x = 0.0;
+    double previous_y = 0.0;
+
     
     // Set window sizes
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -281,7 +278,7 @@ int main(int argc, char* argv[])
     glfwSwapInterval(smoke_test ? 0 : 1);
     
     // Example points
-    for (const DataPoint& point : exampleData.points)
+    for (const DataPoint& point : plotting_data.points)
         projected_points.push_back(project_columns(point, {2, 0, 3}));
     const SceneFit fit = calculate_scene_fit(projected_points);
     
@@ -308,7 +305,39 @@ int main(int argc, char* argv[])
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
 
-        glClearColor(0.10f, 0.18f, 0.22f, 1.0f);
+        double cursor_x = 0.0;
+        double cursor_y = 0.0;
+        glfwGetCursorPos(window, &cursor_x, &cursor_y);
+
+        const bool pressed = 
+            glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE &&
+            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        
+        if (pressed && dragging)
+        {
+            const float dx = static_cast<float>(cursor_x - previous_x);
+            const float dy = static_cast<float>(cursor_y - previous_y);
+            yaw += dx * mouse_sensitivity;
+            pitch -= dy * mouse_sensitivity;
+            pitch = std::clamp(
+                pitch, -glm::radians(89.0f), glm::radians(89.0f));
+        }
+        dragging = pressed;
+        previous_x = cursor_x;
+        previous_y = cursor_y;
+
+        const glm::vec3 camera_position = camera_distance * glm::vec3(
+            std::sin(pitch),
+            -std::cos(pitch) * std::sin(yaw),
+            -std::cos(pitch) * std::cos(yaw));
+        
+        const glm::mat4 view = glm::lookAt(
+            camera_position,
+            glm::vec3(0.0f),
+            glm::vec3(1.0f, 0.0f, 0.0f)
+        );
+
+        glClearColor(0.8f, 0.0f, 0.8f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         
         glfwGetFramebufferSize(window, &width, &height);

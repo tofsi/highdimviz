@@ -6,5 +6,5 @@ struct PlotPoint
 {
     std::size_t source_row{};
     glm::vec3 position{};
-    float radius = 0.05f;
+    float radius = 0.005f;
 };
