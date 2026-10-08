@@ -1,3 +1,4 @@
+// Dependencies
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 #include <fstream>
@@ -16,6 +17,13 @@
 #include <vector>
 #include <cmath>
 #include <numbers>
+
+// User defined
+#include "Dataset.hpp"
+#include "Projection.hpp"
+#include "example.hpp"
+#include "SceneFit.hpp"
+#include "PlotPoint.hpp"
 
 namespace
 {
@@ -258,7 +266,7 @@ int main(int argc, char* argv[])
     const GLint model_location = glGetUniformLocation(program, "model");
     const GLint view_location = glGetUniformLocation(program, "view");
     const GLint projection_location = glGetUniformLocation(program, "projection");
-    const glm::mat4 model(1.0f);
+    //const glm::mat4 model(1.0f);
     const glm::mat4 view = glm::lookAt(
         glm::vec3(0.0f, 0.0f, 3.0f),
         glm::vec3(0.0f, 0.0f, 0.0f),
@@ -271,6 +279,26 @@ int main(int argc, char* argv[])
     glfwGetFramebufferSize(window, &width, &height);
     glViewport(0, 0, width, height);
     glfwSwapInterval(smoke_test ? 0 : 1);
+    
+    // Example points
+    for (const DataPoint& point : exampleData.points)
+        projected_points.push_back(project_columns(point, {2, 0, 3}));
+    const SceneFit fit = calculate_scene_fit(projected_points);
+    
+    std::vector<PlotPoint> plot_points;
+    for (std::size_t row = 0; row < projected_points.size(); ++row)
+    {
+        const ProjectedPoint scene =
+            apply_scene_fit(projected_points[row], fit);
+        PlotPoint marker;
+        marker.source_row = row;
+        marker.position = glm::vec3(
+            static_cast<float>(scene[0]),
+            static_cast<float>(scene[1]),
+            static_cast<float>(scene[2]));
+        plot_points.push_back(marker);
+    }
+    
 
     int exit_code = 0;
     while (!glfwWindowShouldClose(window))
@@ -291,13 +319,22 @@ int main(int argc, char* argv[])
                 static_cast<float>(width) / static_cast<float>(height),
                 0.1f, 100.0f);
             glUseProgram(program);
-            glUniformMatrix4fv(model_location, 1, GL_FALSE, glm::value_ptr(model));
             glUniformMatrix4fv(view_location, 1, GL_FALSE, glm::value_ptr(view));
             glUniformMatrix4fv(projection_location, 1, GL_FALSE, glm::value_ptr(projection));
             glBindVertexArray(vertex_array);
-            glDrawElements(
-                GL_TRIANGLES, static_cast<GLsizei>(indices.size()),
-                GL_UNSIGNED_INT, nullptr);
+            for (const PlotPoint& marker : plot_points)
+            {
+                const glm::mat4 marker_model = glm::scale(
+                    glm::translate(glm::mat4(1.0f), marker.position),
+                    glm::vec3(marker.radius));
+                glUniformMatrix4fv(
+                    model_location, 1, GL_FALSE, glm::value_ptr(marker_model)
+                );
+                glDrawElements(
+                    GL_TRIANGLES, static_cast<GLsizei>(indices.size()),
+                    GL_UNSIGNED_INT, nullptr
+                );
+            }
             glBindVertexArray(0);
         }
 

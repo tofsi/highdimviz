@@ -28,7 +28,15 @@ FetchContent_MakeAvailable(glm)
 add_library(glad STATIC external/glad/src/gl.c)
 target_include_directories(glad PUBLIC external/glad/include)
 
-add_executable(highdimviz src/main.cpp)
+add_executable(highdimviz 
+    src/main.cpp # Source files
+    #src/Dataset.hpp
+    #src/example.hpp
+    #src/Projection.hpp
+    src/Projection.cpp
+    #src/SceneFit.hpp
+    src/SceneFit.cpp
+)
 target_compile_features(highdimviz PRIVATE cxx_std_20)
 set_target_properties(highdimviz PROPERTIES CXX_EXTENSIONS OFF)
 target_compile_definitions(highdimviz PRIVATE GLFW_INCLUDE_NONE)
