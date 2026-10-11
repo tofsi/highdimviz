@@ -6,7 +6,10 @@
 #include <stdexcept>
 #include <string>
 #include <cstddef>
-
+#include <vector>
+#include <cmath>
+#include <numbers>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
@@ -14,10 +17,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <vector>
-#include <cmath>
-#include <numbers>
-#include <algorithm>
+#include <glm/gtc/quaternion.hpp>
+
+
 
 // User defined
 #include "Dataset.hpp"
@@ -259,14 +261,17 @@ int main(int argc, char* argv[])
     const GLint view_location = glGetUniformLocation(program, "view");
     const GLint projection_location = glGetUniformLocation(program, "projection");
     
-    // Mouse controls
-    float yaw = 0.0f;
-    float pitch = 0.0f;
-    const float camera_distance = 3.0f;
-    const float mouse_sensitivity = 0.005f;
-    bool dragging = false;
-    double previous_x = 0.0;
-    double previous_y = 0.0;
+    // Movement controls
+    glm::quat orientation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+    const float roll_speed = glm::radians(90.0f);
+    const float movement_speed = 1.0f;
+    bool captured = false;
+    bool first_mouse = true;
+    double previous_x = 0.0, previous_y = 0.0;
+    glm::vec3 camera_position(0.0f, 0.0f, 3.0f);
+    double previous_time = glfwGetTime();
+    const glm::vec3 world_up(1.0f, 0.0f, 0.0f);
+    const float mouse_sensitivity = 0.002f;
 
     
     // Set window sizes
@@ -300,46 +305,67 @@ int main(int argc, char* argv[])
     int exit_code = 0;
     while (!glfwWindowShouldClose(window))
     {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+
+        // Movement
+        const double current_time = glfwGetTime();
+        const float delta_time = static_cast<float>(
+        std::min(current_time - previous_time, 0.1));
+        previous_time = current_time;   
+        const bool focused = 
+            glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+        const auto key = [window](int code) -> float{
+            return glfwGetKey(window, code) == GLFW_PRESS ? 1.0f : 0.0f;
+        };
+        // Set input mode, either mouse locked or free
+        if (!focused || key(GLFW_KEY_ESCAPE))
         {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            captured = false;
+            first_mouse = true;
+        }
+        else if (!captured && 
+            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+        {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            captured = true;
+            first_mouse = true;
+        }
+        // WASD movement
+        if (captured)
+        {
+            double x = 0.0, y = 0.0;
+            glfwGetCursorPos(window, &x, &y);
+            const float dx = first_mouse ? 0.0f : static_cast<float>(x-previous_x);
+            const float dy = first_mouse ? 0.0f : static_cast<float>(y-previous_y);
+            previous_x = x;
+            previous_y = y;
+            first_mouse = false;
+
+            const float roll = (key(GLFW_KEY_Q) - key(GLFW_KEY_E)) 
+                * roll_speed * delta_time;
+            orientation = glm::normalize(orientation 
+                * glm::angleAxis(-dx * mouse_sensitivity, glm::vec3(0, 1, 0))
+                * glm::angleAxis(-dy * mouse_sensitivity, glm::vec3(1, 0, 0))
+                * glm::angleAxis(roll, glm::vec3(0, 0, 1)));
+            
+            glm::vec3 movement(
+                key(GLFW_KEY_D) - key(GLFW_KEY_A),
+                key(GLFW_KEY_SPACE) - key(GLFW_KEY_LEFT_CONTROL),
+                key(GLFW_KEY_S) - key(GLFW_KEY_W));
+            if (glm::dot(movement, movement) > 0.0f)
+                camera_position += (orientation * glm::normalize(movement))
+                    * movement_speed * delta_time;
         }
 
-        double cursor_x = 0.0;
-        double cursor_y = 0.0;
-        glfwGetCursorPos(window, &cursor_x, &cursor_y);
+        const glm::vec3 forward = orientation * glm::vec3(0, 0, -1);
+        const glm::vec3 up = orientation * glm::vec3(0, 1, 0);
+        const glm::mat4 view = 
+            glm::lookAt(camera_position, camera_position + forward, up);
 
-        const bool pressed = 
-            glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE &&
-            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        
-        if (pressed && dragging)
-        {
-            const float dx = static_cast<float>(cursor_x - previous_x);
-            const float dy = static_cast<float>(cursor_y - previous_y);
-            yaw += dx * mouse_sensitivity;
-            pitch -= dy * mouse_sensitivity;
-            pitch = std::clamp(
-                pitch, -glm::radians(89.0f), glm::radians(89.0f));
-        }
-        dragging = pressed;
-        previous_x = cursor_x;
-        previous_y = cursor_y;
-
-        const glm::vec3 camera_position = camera_distance * glm::vec3(
-            std::sin(pitch),
-            -std::cos(pitch) * std::sin(yaw),
-            -std::cos(pitch) * std::cos(yaw));
-        
-        const glm::mat4 view = glm::lookAt(
-            camera_position,
-            glm::vec3(0.0f),
-            glm::vec3(1.0f, 0.0f, 0.0f)
-        );
-
+        // Reset
         glClearColor(0.8f, 0.0f, 0.8f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        
+        // Draw
         glfwGetFramebufferSize(window, &width, &height);
         if (width > 0 && height > 0)
         {
