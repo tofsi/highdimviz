@@ -36,13 +36,12 @@ FetchContent_MakeAvailable(csv_parser)
 add_library(glad STATIC external/glad/src/gl.c)
 target_include_directories(glad PUBLIC external/glad/include)
 
-add_executable(highdimviz 
-    src/main.cpp # Source files
-    #src/Dataset.hpp
-    #src/example.hpp
-    #src/Projection.hpp
+add_executable(highdimviz
+    src/main.cpp
+    src/Camera.cpp
+    src/ShaderProgram.cpp
+    src/SphereRenderer.cpp
     src/Projection.cpp
-    #src/SceneFit.hpp
     src/SceneFit.cpp
     src/Dataset.cpp
 )
@@ -55,4 +54,17 @@ if(MSVC)
     target_compile_options(highdimviz PRIVATE /W4 /permissive-)
 else()
     target_compile_options(highdimviz PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(camera_tests tests/CameraTests.cpp src/Camera.cpp)
+    target_include_directories(camera_tests PRIVATE src)
+    target_compile_features(camera_tests PRIVATE cxx_std_20)
+    target_compile_definitions(camera_tests PRIVATE GLFW_INCLUDE_NONE)
+    target_link_libraries(camera_tests PRIVATE glfw glm)
+    add_test(NAME camera_math COMMAND camera_tests)
+    add_test(NAME rendering_smoke COMMAND highdimviz --smoke-test)
+    set_tests_properties(rendering_smoke PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

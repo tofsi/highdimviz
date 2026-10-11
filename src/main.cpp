@@ -1,35 +1,25 @@
-// Dependencies
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
-#include <fstream>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <cstddef>
-#include <vector>
-#include <cmath>
-#include <numbers>
-#include <algorithm>
-#include <cstdlib>
-#include <iostream>
-#include <string_view>
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/quaternion.hpp>
-
-
-
-// User defined
+#include "Camera.hpp"
 #include "Dataset.hpp"
 #include "Projection.hpp"
-#include "example.hpp"
 #include "SceneFit.hpp"
-#include "PlotPoint.hpp"
+#include "SphereRenderer.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace
 {
+constexpr glm::vec3 background(0.8f, 0.0f, 0.8f);
+
 void error_callback(int code, const char* description)
 {
     std::cerr << "GLFW error " << code << ": " << description << '\n';
@@ -39,391 +29,131 @@ void framebuffer_size_callback(GLFWwindow*, int width, int height)
 {
     glViewport(0, 0, width, height);
 }
-// Shader stuff
-GLuint compile_shader(GLenum type, const std::string& source)
-{
-    GLuint shader = glCreateShader(type);
-    const char* source_text = source.c_str();
-    glShaderSource(shader, 1, &source_text, nullptr);
-    glCompileShader(shader);
 
-    // Check compile success
-    GLint success = GL_FALSE;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    
-    // report failures
-    if (success == GL_FALSE)
+std::vector<PlotPoint> make_plot_points(const DataSet& data)
+{
+    std::vector<ProjectedPoint> projected;
+    projected.reserve(data.points.size());
+    for (const DataPoint& point : data.points)
+        projected.push_back(project_columns(point, {2, 0, 3}));
+    const SceneFit fit = calculate_scene_fit(projected);
+
+    std::vector<PlotPoint> markers;
+    markers.reserve(projected.size());
+    for (std::size_t row = 0; row < projected.size(); ++row)
     {
-        GLint log_length = 0;
-        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &log_length);
-        std::string log(log_length > 0? log_length : 1, '\0');
-        glGetShaderInfoLog(shader, log_length, nullptr, log.data());
-        glDeleteShader(shader);
-        throw std::runtime_error("Shader compilation failed:\n" + log);
+        const ProjectedPoint scene = apply_scene_fit(projected[row], fit);
+        PlotPoint marker;
+        marker.source_row = row;
+        marker.position = glm::vec3(static_cast<float>(scene[0]),
+            static_cast<float>(scene[1]), static_cast<float>(scene[2]));
+        markers.push_back(marker);
     }
-
-    return shader;
+    return markers;
 }
 
-std::string read_shader_file(const std::string& path)
+void check_rendering(int width, int height)
 {
-    std::ifstream file(path);
-
-    if (!file.is_open())
+    unsigned char corner[4]{}, center[4]{};
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner);
+    glReadPixels(width / 2, height / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, center);
+    bool background_matches = true;
+    bool sphere_visible = false;
+    for (int channel = 0; channel < 3; ++channel)
     {
-        throw std::runtime_error("Could not open shader file: " + path);
+        const int expected = static_cast<int>(std::lround(background[channel] * 255));
+        background_matches &= std::abs(static_cast<int>(corner[channel]) - expected) <= 2;
+        sphere_visible |= std::abs(static_cast<int>(center[channel]) - expected) > 10;
     }
-
-    std::ostringstream contents;
-    contents << file.rdbuf();
-    return contents.str();
+    if (glGetError() != GL_NO_ERROR || !background_matches || !sphere_visible)
+        throw std::runtime_error("OpenGL rendering check failed.");
+    std::cout << "Context, shaders, sphere drawing, and pixel checks passed\n";
 }
 
-
-// Geometry helpers
-struct Vertex
+int run(GLFWwindow* window, bool smoke_test)
 {
-    glm::vec3 position;
-    glm::vec3 normal;
-};
+    const DataSet data = load_csv("data/gaussian_example.csv");
+    const std::vector<PlotPoint> points = make_plot_points(data);
+    std::cout << "Loaded " << points.size() << " plot points\n";
+    SphereRenderer renderer;
+    renderer.set_points(points);
+    Camera camera;
 
-void generate_sphere(
-    std::vector<Vertex>& vertices,
-    std::vector<unsigned int>& indices,
-    int stacks, int sectors, float radius)
-{
-    vertices.clear();
-    indices.clear();
-    // generate vertices
-    for (int i=0;i<=stacks;i++){
-        for (int j=0;j<=sectors;j++){
-            float theta = std::numbers::pi_v<float>
-            * static_cast<float>(i) / static_cast<float>(stacks);
-            float phi = 2.0f * std::numbers::pi_v<float>
-            * static_cast<float>(j) / static_cast<float>(sectors);
-            glm::vec3 normal(
-                std::sin(theta) * std::cos(phi),
-                std::cos(theta),
-                std::sin(theta)* std::sin(phi));
-            vertices.push_back({radius*normal, normal});
-        }
-    }
-    // generate triangle indices
-    for (int i=0;i<stacks;i++){
-        for (int j=0;j<sectors;j++){
-            unsigned int a = static_cast<unsigned int>(i * (sectors + 1) + j);
-            unsigned int b = a + static_cast<unsigned int>(sectors + 1);
+    // A large centered marker makes the GPU smoke test deterministic.
+    if (smoke_test)
+        renderer.set_points({PlotPoint{0, glm::vec3(0.0f), 0.5f}});
 
-            indices.insert(indices.end(),{
-                a, a + 1, b,
-                a + 1, b + 1, b
-            });
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSwapInterval(smoke_test ? 0 : 1);
+    double previous_time = glfwGetTime();
+
+    while (!glfwWindowShouldClose(window))
+    {
+        glfwPollEvents();
+        const double current_time = glfwGetTime();
+        const float delta_time = static_cast<float>(
+            std::min(current_time - previous_time, 0.1));
+        previous_time = current_time;
+        camera.update(window, delta_time);
+
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        if (width > 0 && height > 0)
+        {
+            glViewport(0, 0, width, height);
+            glClearColor(background.x, background.y, background.z, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            const glm::mat4 projection = glm::perspective(glm::radians(45.0f),
+                static_cast<float>(width) / static_cast<float>(height), 0.1f, 100.0f);
+            renderer.draw(camera.view_matrix(), projection);
+            if (smoke_test)
+                check_rendering(width, height);
+            glfwSwapBuffers(window);
         }
+        else if (smoke_test)
+            throw std::runtime_error("Smoke test framebuffer is empty.");
+        if (smoke_test)
+            break;
     }
+    return 0;
 }
 }
-
 
 int main(int argc, char* argv[])
 {
     const bool smoke_test = argc == 2 && std::string_view(argv[1]) == "--smoke-test";
-
     glfwSetErrorCallback(error_callback);
     if (!glfwInit())
-    {
         return 1;
-    }
-
+    struct GlfwLifetime { ~GlfwLifetime() { glfwTerminate(); } } lifetime;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_VISIBLE, smoke_test ? GLFW_FALSE : GLFW_TRUE);
-
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "highdimviz", nullptr, nullptr);
+    const std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> window(
+        glfwCreateWindow(1280, 720, "highdimviz", nullptr, nullptr), glfwDestroyWindow);
     if (!window)
-    {
-        glfwTerminate();
         return 1;
-    }
-
-    glfwMakeContextCurrent(window);
+    glfwMakeContextCurrent(window.get());
     if (!gladLoadGL(glfwGetProcAddress))
     {
         std::cerr << "Failed to load OpenGL with GLAD\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
         return 1;
     }
-    const DataSet plotting_data = load_csv("data/gaussian_example.csv");
-    GLuint program = 0;
-    // read, compile shaders
+    std::cout << "OpenGL version: " << glGetString(GL_VERSION) << '\n'
+              << "Renderer: " << glGetString(GL_RENDERER) << '\n';
     try
     {
-        // Read shaders
-        const std::string vertex_source =
-            read_shader_file("shaders/sphere.vert");
-        const std::string fragment_source =
-            read_shader_file("shaders/sphere.frag");
-        // Compile shaders
-        GLuint vertex_shader =
-            compile_shader(GL_VERTEX_SHADER, vertex_source);
-        GLuint fragment_shader =
-            compile_shader(GL_FRAGMENT_SHADER, fragment_source);
-        std::cout << "both shaders compiled successfully\n";
-        // Attach shaders
-        program = glCreateProgram();
-        glAttachShader(program, vertex_shader);
-        glAttachShader(program, fragment_shader);
-        glLinkProgram(program);
-        // Check link status
-        GLint success = GL_FALSE;
-        glGetProgramiv(program, GL_LINK_STATUS, &success);
-        glDeleteShader(vertex_shader);
-        glDeleteShader(fragment_shader);
-        // Throw error
-        if (success == GL_FALSE)
-        {
-            GLint log_length = 0;
-            glGetProgramiv(program, GL_INFO_LOG_LENGTH, &log_length);
-            std::string log(log_length > 0 ? log_length : 1, '\0');
-            glGetProgramInfoLog(program, log_length, nullptr, log.data());
-            glDeleteProgram(program);
-            throw std::runtime_error("Shader linking failed:\n" + log);
-        }
-        std::cout << "Shader program linked successfully\n";
+        // All GPU owners inside run() are destroyed before the window/context.
+        return run(window.get(), smoke_test);
     }
     catch (const std::exception& error)
     {
         std::cerr << error.what() << '\n';
-        glfwDestroyWindow(window);
-        glfwTerminate();
         return 1;
     }
-
-    std::cout << "OpenGL version: " << glGetString(GL_VERSION) << '\n';
-    std::cout << "Renderer: " << glGetString(GL_RENDERER) << '\n';
-    // allocate sphere data to buffer
-    std::vector<Vertex> vertices;
-    std::vector<unsigned int> indices;
-    generate_sphere(vertices, indices, 4, 8, 1.0f);
-    GLuint vertex_buffer = 0;
-    glGenBuffers(1, &vertex_buffer);
-    glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-    const GLsizeiptr vertex_bytes =
-        static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex));
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        vertex_bytes,
-        vertices.data(),
-        GL_STATIC_DRAW
-    );
-
-    // VAO setup
-    GLuint vertex_array = 0;
-    glGenVertexArrays(1, &vertex_array);
-    glBindVertexArray(vertex_array);
-
-    glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-    glVertexAttribPointer(
-        0,
-        3,
-        GL_FLOAT,
-        GL_FALSE,
-        sizeof(Vertex),
-        reinterpret_cast<const void*>(offsetof(Vertex, position)));
-    glEnableVertexAttribArray(0);
-    
-    glVertexAttribPointer(
-        1,
-        3,
-        GL_FLOAT,
-        GL_FALSE,
-        sizeof(Vertex),
-        reinterpret_cast<const void*>(offsetof(Vertex, normal)));
-    glEnableVertexAttribArray(1);
-
-    GLuint index_buffer = 0;
-    glGenBuffers(1, &index_buffer);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
-    const GLsizeiptr index_bytes = 
-        static_cast<GLsizeiptr>(indices.size() * sizeof(unsigned int));
-    glBufferData(
-        GL_ELEMENT_ARRAY_BUFFER,
-        index_bytes,
-        indices.data(),
-        GL_STATIC_DRAW);
-    
-    glBindVertexArray(0); // Unbind vertex_array
-    
-    // Create matrices for vertex shader
-    glEnable(GL_DEPTH_TEST);
-    const GLint model_location = glGetUniformLocation(program, "model");
-    const GLint view_location = glGetUniformLocation(program, "view");
-    const GLint projection_location = glGetUniformLocation(program, "projection");
-    
-    // Movement controls
-    glm::quat orientation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    const float roll_speed = glm::radians(90.0f);
-    const float movement_speed = 1.0f;
-    bool captured = false;
-    bool first_mouse = true;
-    double previous_x = 0.0, previous_y = 0.0;
-    glm::vec3 camera_position(0.0f, 0.0f, 3.0f);
-    double previous_time = glfwGetTime();
-    const glm::vec3 world_up(1.0f, 0.0f, 0.0f);
-    const float mouse_sensitivity = 0.002f;
-
-    
-    // Set window sizes
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-    int width = 0;
-    int height = 0;
-    glfwGetFramebufferSize(window, &width, &height);
-    glViewport(0, 0, width, height);
-    glfwSwapInterval(smoke_test ? 0 : 1);
-    
-    // Example points
-    for (const DataPoint& point : plotting_data.points)
-        projected_points.push_back(project_columns(point, {2, 0, 3}));
-    const SceneFit fit = calculate_scene_fit(projected_points);
-    
-    std::vector<PlotPoint> plot_points;
-    for (std::size_t row = 0; row < projected_points.size(); ++row)
-    {
-        const ProjectedPoint scene =
-            apply_scene_fit(projected_points[row], fit);
-        PlotPoint marker;
-        marker.source_row = row;
-        marker.position = glm::vec3(
-            static_cast<float>(scene[0]),
-            static_cast<float>(scene[1]),
-            static_cast<float>(scene[2]));
-        plot_points.push_back(marker);
-    }
-    
-
-    int exit_code = 0;
-    while (!glfwWindowShouldClose(window))
-    {
-
-        // Movement
-        const double current_time = glfwGetTime();
-        const float delta_time = static_cast<float>(
-        std::min(current_time - previous_time, 0.1));
-        previous_time = current_time;   
-        const bool focused = 
-            glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
-        const auto key = [window](int code) -> float{
-            return glfwGetKey(window, code) == GLFW_PRESS ? 1.0f : 0.0f;
-        };
-        // Set input mode, either mouse locked or free
-        if (!focused || key(GLFW_KEY_ESCAPE))
-        {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-            captured = false;
-            first_mouse = true;
-        }
-        else if (!captured && 
-            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
-        {
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            captured = true;
-            first_mouse = true;
-        }
-        // WASD movement
-        if (captured)
-        {
-            double x = 0.0, y = 0.0;
-            glfwGetCursorPos(window, &x, &y);
-            const float dx = first_mouse ? 0.0f : static_cast<float>(x-previous_x);
-            const float dy = first_mouse ? 0.0f : static_cast<float>(y-previous_y);
-            previous_x = x;
-            previous_y = y;
-            first_mouse = false;
-
-            const float roll = (key(GLFW_KEY_Q) - key(GLFW_KEY_E)) 
-                * roll_speed * delta_time;
-            orientation = glm::normalize(orientation 
-                * glm::angleAxis(-dx * mouse_sensitivity, glm::vec3(0, 1, 0))
-                * glm::angleAxis(-dy * mouse_sensitivity, glm::vec3(1, 0, 0))
-                * glm::angleAxis(roll, glm::vec3(0, 0, 1)));
-            
-            glm::vec3 movement(
-                key(GLFW_KEY_D) - key(GLFW_KEY_A),
-                key(GLFW_KEY_SPACE) - key(GLFW_KEY_LEFT_CONTROL),
-                key(GLFW_KEY_S) - key(GLFW_KEY_W));
-            if (glm::dot(movement, movement) > 0.0f)
-                camera_position += (orientation * glm::normalize(movement))
-                    * movement_speed * delta_time;
-        }
-
-        const glm::vec3 forward = orientation * glm::vec3(0, 0, -1);
-        const glm::vec3 up = orientation * glm::vec3(0, 1, 0);
-        const glm::mat4 view = 
-            glm::lookAt(camera_position, camera_position + forward, up);
-
-        // Reset
-        glClearColor(0.8f, 0.0f, 0.8f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        // Draw
-        glfwGetFramebufferSize(window, &width, &height);
-        if (width > 0 && height > 0)
-        {
-            const glm::mat4 projection = glm::perspective(
-                glm::radians(45.0f),
-                static_cast<float>(width) / static_cast<float>(height),
-                0.1f, 100.0f);
-            glUseProgram(program);
-            glUniformMatrix4fv(view_location, 1, GL_FALSE, glm::value_ptr(view));
-            glUniformMatrix4fv(projection_location, 1, GL_FALSE, glm::value_ptr(projection));
-            glBindVertexArray(vertex_array);
-            for (const PlotPoint& marker : plot_points)
-            {
-                const glm::mat4 marker_model = glm::scale(
-                    glm::translate(glm::mat4(1.0f), marker.position),
-                    glm::vec3(marker.radius));
-                glUniformMatrix4fv(
-                    model_location, 1, GL_FALSE, glm::value_ptr(marker_model)
-                );
-                glDrawElements(
-                    GL_TRIANGLES, static_cast<GLsizei>(indices.size()),
-                    GL_UNSIGNED_INT, nullptr
-                );
-            }
-            glBindVertexArray(0);
-        }
-
-        if (smoke_test)
-        {
-            // Reading a pixel verifies that OpenGL rendered the expected clear color.
-            unsigned char pixel[4]{};
-            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-            const bool color_matches = std::abs(static_cast<int>(pixel[0]) - 26) <= 2
-                && std::abs(static_cast<int>(pixel[1]) - 46) <= 2
-                && std::abs(static_cast<int>(pixel[2]) - 56) <= 2;
-            if (glGetError() != GL_NO_ERROR || !color_matches)
-            {
-                std::cerr << "OpenGL rendering check failed\n";
-                exit_code = 1;
-            }
-            else
-            {
-                std::cout << "GLFW context, GLAD loading, and rendering check passed\n";
-            }
-        }
-
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-        if (smoke_test)
-        {
-            break;
-        }
-    }
-    glDeleteBuffers(1, &vertex_buffer);
-    glDeleteProgram(program);
-    glDeleteVertexArrays(1, &vertex_array);
-    glDeleteBuffers(1, &index_buffer);
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return exit_code;
 }
